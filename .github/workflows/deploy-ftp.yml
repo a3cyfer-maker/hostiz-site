@@ -1,0 +1,63 @@
+name: Publicar site por FTP
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "dist/**"
+      - ".github/workflows/deploy-ftp.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hostiz-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Enviar arquivos para a hospedagem
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment:
+      name: production
+      url: ${{ vars.SITE_URL }}
+
+    steps:
+      - name: Baixar o codigo do site
+        uses: actions/checkout@v4
+
+      - name: Validar arquivos de publicacao
+        run: node scripts/validate-static-site.mjs
+
+      - name: Instalar cliente FTP
+        run: sudo apt-get update && sudo apt-get install --yes lftp
+
+      - name: Publicar a pasta dist
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_PORT: ${{ secrets.FTP_PORT || '21' }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_TARGET_DIR: ${{ secrets.FTP_TARGET_DIR || '.' }}
+        run: |
+          test -n "$FTP_SERVER"
+          test -n "$FTP_PORT"
+          test -n "$FTP_USERNAME"
+          test -n "$FTP_PASSWORD"
+          test -n "$FTP_TARGET_DIR"
+          lftp -p "$FTP_PORT" -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER" -e "
+            set cmd:fail-exit true;
+            set net:max-retries 2;
+            set net:timeout 20;
+            set ftp:passive-mode true;
+            mirror --reverse --verbose --only-newer --parallel=2 dist/ \"$FTP_TARGET_DIR\";
+            bye
+          "
+
+      - name: Confirmar site no ar
+        if: ${{ vars.SITE_URL != '' }}
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: curl --fail --location --retry 3 --retry-delay 5 --max-time 30 "$SITE_URL"
